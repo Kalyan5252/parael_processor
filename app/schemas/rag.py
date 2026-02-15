@@ -12,3 +12,4 @@ class QueryRequest(BaseModel):
 class QueryResponse(BaseModel):
     answer: str
     sources: List[str]
+    file_ids: List[str]

@@ -2,6 +2,8 @@ import uuid
 from typing import List
 from pypdf import PdfReader
 from io import BytesIO
+import pandas as pd
+import docx
 from app.core.clients import collection, embed_text
 
 class IngestionService:
@@ -14,6 +16,18 @@ class IngestionService:
             if text:
                 pages.append(text)
         return "\n".join(pages)
+
+    def load_docx_from_bytes(self, file_content: bytes) -> str:
+        doc = docx.Document(BytesIO(file_content))
+        return "\n".join([para.text for para in doc.paragraphs])
+
+    def load_excel_from_bytes(self, file_content: bytes) -> str:
+        df = pd.read_excel(BytesIO(file_content))
+        return df.to_string()
+
+    def load_csv_from_bytes(self, file_content: bytes) -> str:
+        df = pd.read_csv(BytesIO(file_content))
+        return df.to_string()
 
     def chunk_text(self, text, chunk_size=500, overlap=100):
         words = text.split()
@@ -75,16 +89,35 @@ class IngestionService:
         return [c["id"] for c in chunks]
     
     def ingest_file(self, file_content: bytes, filename: str, user_id: str, file_id: str) -> str:
-        # Currently only supports PDF as per snippet, but we can extend
-        if filename.lower().endswith('.pdf'):
-            text = self.load_pdf_from_bytes(file_content)
+        try:
+            filename_lower = filename.lower()
+            text = ""
+            msg = ""
+
+            if filename_lower.endswith('.pdf'):
+                text = self.load_pdf_from_bytes(file_content)
+                msg = "PDF Ingested"
+            elif filename_lower.endswith('.docx'):
+                text = self.load_docx_from_bytes(file_content)
+                msg = "Docx Ingested"
+            elif filename_lower.endswith(('.xlsx', '.xls')):
+                text = self.load_excel_from_bytes(file_content)
+                msg = "Excel Ingested"
+            elif filename_lower.endswith('.csv'):
+                text = self.load_csv_from_bytes(file_content)
+                msg = "CSV Ingested"
+            elif filename_lower.endswith('.txt'):
+                text = file_content.decode('utf-8', errors='ignore')
+                msg = "Text File Ingested"
+            else:
+                return "ingestion not supports file type"
+
             self.ingest_text(text, user_id, file_id)
-            return "PDF Ingested"
-        else:
-             # Fallback for text files
-            text = file_content.decode('utf-8', errors='ignore')
-            self.ingest_text(text, user_id, file_id)
-            return "Text File Ingested"
+            return msg
+
+        except Exception as e:
+            print(f"Error ingesting file {filename}: {e}")
+            return "unknown problem at ingestion"
 
 
 ingestion_service = IngestionService()
