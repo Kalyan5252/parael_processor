@@ -2,8 +2,10 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Body
 from typing import List, Annotated
 
 from app.schemas.rag import IngestResponse, QueryRequest, QueryResponse
+from app.schemas.clip import ImageSearchRequest, ImageSearchResponse, ImageIndexResponse
 from app.services.ingestion import ingestion_service
 from app.services.generation import rag_service
+from app.services.clipservice import clip_service
 
 router = APIRouter()
 
@@ -28,3 +30,27 @@ async def query_documents(request: QueryRequest):
     """
     result = await rag_service.query(request.query, request.user_id)
     return result
+
+
+@router.post("/clip/index", response_model=ImageIndexResponse)
+async def clip_index_image(file: UploadFile = File(...)):
+    """
+    Index an image using CLIP and ChromaDB.
+    """
+    content = await file.read()
+    try:
+        doc_id = clip_service.index_image(content, file.filename)
+        return {"message": "Image indexed successfully", "id": doc_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/clip/search", response_model=ImageSearchResponse)
+async def clip_search(request: ImageSearchRequest):
+    """
+    Search for images using text query via CLIP.
+    """
+    try:
+        results = clip_service.search(request.query, request.top_k)
+        return {"results": results}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

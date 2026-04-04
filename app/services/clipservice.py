@@ -3,86 +3,88 @@ import torch
 import clip
 import chromadb
 from PIL import Image
+import io
+import uuid
+import numpy as np
 
-IMAGE_FOLDER = "./images"   # put test images here
-QUERY = "a white car"       # 🔥 change this to test
-TOP_K = 5
+from app.core.config import settings
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+class ClipService:
+    def __init__(self):
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model = None
+        self.preprocess = None
+        self.chroma_client = None
+        self.collection = None
+        self.collection_name = 'clip_test'
+        self._initialized = False
 
-print("Loading CLIP...")
-model, preprocess = clip.load("ViT-B/32", device=device)
+    def initialize(self):
+        if self._initialized:
+            return
+        
+        print("Loading CLIP model...")
+        self.model, self.preprocess = clip.load("ViT-B/32", device=self.device)
+        
+        print("Connecting to ChromaDB Cloud...")
+        self.chroma_client = chromadb.CloudClient(
+            api_key=settings.CHROMA_KEY, # Using config
+            tenant=settings.CHROMA_TENANT,
+            database=settings.CHROMA_DATABASE
+        )
+        
+        self.collection = self.chroma_client.get_or_create_collection(
+            name=self.collection_name,
+            metadata={"hnsw:space": "cosine"}
+        )
+        self._initialized = True
 
-chroma_client = chromadb.CloudClient(
-    api_key='ck-5ihVuj8ehAML8zZQKNWA49XQbTvU47i33SL2jguiHKtH',
-    tenant="851123fe-e1f1-46f9-8225-4d0543e2d988",
-    database="test"
-)
+    def get_image_embedding(self, image: Image.Image) -> np.ndarray:
+        image_input = self.preprocess(image).unsqueeze(0).to(self.device)
+        with torch.no_grad():
+            emb = self.model.encode_image(image_input)
+        emb = emb / emb.norm(dim=-1, keepdim=True)
+        return emb.cpu().numpy()[0]
 
-collection = chroma_client.get_or_create_collection(
-    name='clip_test',
-    metadata={"hnsw:space": "cosine"}
-)
+    def get_text_embedding(self, text: str) -> np.ndarray:
+        tokens = clip.tokenize([text]).to(self.device)
+        with torch.no_grad():
+            emb = self.model.encode_text(tokens)
+        emb = emb / emb.norm(dim=-1, keepdim=True)
+        return emb.cpu().numpy()[0]
 
-def get_image_embedding(path):
-    image = preprocess(Image.open(path)).unsqueeze(0).to(device)
-    with torch.no_grad():
-        emb = model.encode_image(image)
-    emb = emb / emb.norm(dim=-1, keepdim=True)
-    return emb.cpu().numpy()[0]
+    def index_image(self, file_content: bytes, filename: str) -> str:
+        self.initialize()
+        
+        image = Image.open(io.BytesIO(file_content)).convert("RGB")
+        emb = self.get_image_embedding(image)
+        
+        doc_id = str(uuid.uuid4())
+        
+        self.collection.add(
+            embeddings=[emb.tolist()],
+            ids=[doc_id],
+            metadatas=[{"path": filename}]
+        )
+        return doc_id
 
+    def search(self, query: str, top_k: int = 5) -> list:
+        self.initialize()
+        
+        query_emb = self.get_text_embedding(query)
+        
+        results = self.collection.query(
+            query_embeddings=[query_emb.tolist()],
+            n_results=top_k
+        )
+        
+        search_results = []
+        if results["metadatas"] and len(results["metadatas"]) > 0:
+            for item, item_id in zip(results["metadatas"][0], results["ids"][0]):
+                search_results.append({
+                    "id": item_id,
+                    "path": item.get("path", "")
+                })
+        return search_results
 
-def get_text_embedding(text):
-    tokens = clip.tokenize([text]).to(device)
-    with torch.no_grad():
-        emb = model.encode_text(tokens)
-    emb = emb / emb.norm(dim=-1, keepdim=True)
-    return emb.cpu().numpy()[0]
-
-
-
-# print("\nIndexing images...")
-
-# image_paths = []
-# embeddings = []
-# ids = []
-
-# for i, filename in enumerate(os.listdir('/Users/kalyan/Desktop/MY FILES/DT projects/smartcloudpip/app/services/images/')):
-#     if not filename.lower().endswith((".jpg", ".png", ".jpeg")):
-#         continue
-
-#     path = os.path.join('/Users/kalyan/Desktop/MY FILES/DT projects/smartcloudpip/app/services/images/', filename)
-
-#     try:
-#         emb = get_image_embedding(path)
-
-#         image_paths.append({"path": path})
-#         embeddings.append(emb)
-#         ids.append(str(i))
-
-#         print(f"✔ Indexed: {filename}")
-
-#     except Exception as e:
-#         print(f"❌ Error: {filename} -> {e}")
-
-# # Add to Chroma
-# collection.add(
-#     embeddings=embeddings,
-#     ids=ids,
-#     metadatas=image_paths
-# )
-
-
-print(f"\n🔍 Searching for: '{QUERY}'")
-
-query_emb = get_text_embedding(QUERY)
-
-results = collection.query(
-    query_embeddings=[query_emb],
-    n_results=TOP_K
-)
-
-print("\n🎯 Top Results:")
-
-for i, item in enumerate(results["metadatas"][0]):
-    print(f"{i+1}. {item['path']}")
+clip_service = ClipService()
