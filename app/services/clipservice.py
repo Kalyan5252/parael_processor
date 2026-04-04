@@ -53,7 +53,7 @@ class ClipService:
         emb = emb / emb.norm(dim=-1, keepdim=True)
         return emb.cpu().numpy()[0]
 
-    def index_image(self, file_content: bytes, filename: str) -> str:
+    def index_image(self, file_content: bytes, filename: str, user_id: str, file_id: str) -> str:
         self.initialize()
         
         image = Image.open(io.BytesIO(file_content)).convert("RGB")
@@ -64,27 +64,34 @@ class ClipService:
         self.collection.add(
             embeddings=[emb.tolist()],
             ids=[doc_id],
-            metadatas=[{"path": filename}]
+            metadatas=[{"path": filename, "userId": user_id, "fileId": file_id}]
         )
         return doc_id
 
-    def search(self, query: str, top_k: int = 5) -> list:
+    def search(self, query: str, user_id: str, top_k: int = 5) -> dict:
         self.initialize()
         
         query_emb = self.get_text_embedding(query)
         
         results = self.collection.query(
             query_embeddings=[query_emb.tolist()],
-            n_results=top_k
+            n_results=top_k,
+            where={"userId": user_id}
         )
         
         search_results = []
+        file_ids = []
         if results["metadatas"] and len(results["metadatas"]) > 0:
             for item, item_id in zip(results["metadatas"][0], results["ids"][0]):
                 search_results.append({
                     "id": item_id,
                     "path": item.get("path", "")
                 })
-        return search_results
+                if item.get("fileId"):
+                    file_ids.append(item.get("fileId"))
+        return {
+            "results": search_results,
+            "file_ids": file_ids
+        }
 
 clip_service = ClipService()

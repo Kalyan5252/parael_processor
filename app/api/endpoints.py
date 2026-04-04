@@ -33,13 +33,17 @@ async def query_documents(request: QueryRequest):
 
 
 @router.post("/clip/index", response_model=ImageIndexResponse)
-async def clip_index_image(file: UploadFile = File(...)):
+async def clip_index_image(
+    file: UploadFile = File(...),
+    user_id: str = Form(...),
+    file_id: str = Form(...)
+):
     """
     Index an image using CLIP and ChromaDB.
     """
     content = await file.read()
     try:
-        doc_id = clip_service.index_image(content, file.filename)
+        doc_id = clip_service.index_image(content, file.filename, user_id, file_id)
         return {"message": "Image indexed successfully", "id": doc_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -50,7 +54,7 @@ async def clip_search(request: ImageSearchRequest):
     Search for images using text query via CLIP.
     """
     try:
-        results = clip_service.search(request.query, request.top_k)
-        return {"results": results}
+        search_output = clip_service.search(request.query, request.user_id, request.top_k)
+        return {"results": search_output["results"], "file_ids": search_output["file_ids"]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
